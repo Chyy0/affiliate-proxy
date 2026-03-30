@@ -1,26 +1,3 @@
-const crypto = require('crypto');
-
-module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') return res.status(204).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-
-  try {
-    const { action, payload } = req.body;
-    if (action === 'amazon-search') {
-      const result = await amazonSearch(payload);
-      return res.status(200).json(result || { error: 'No results found' });
-    }
-    return res.status(400).json({ error: 'Unknown action' });
-  } catch (e) {
-    console.error('Proxy error:', e.message);
-    return res.status(500).json({ error: e.message });
-  }
-};
-
 async function amazonSearch({ query, tag, market }) {
   const accessKey = process.env.AMAZON_ACCESS_KEY;
   const secretKey = process.env.AMAZON_SECRET_KEY;
@@ -34,11 +11,16 @@ async function amazonSearch({ query, tag, market }) {
 
   const body = JSON.stringify({
     Keywords: query,
-    Resources: ['Images.Primary.Large', 'Images.Primary.Medium', 'ItemInfo.Title', 'Offers.Listings.Price'],
+    Resources: [
+      'Images.Primary.Large',
+      'Images.Primary.Medium',
+      'ItemInfo.Title',
+      'Offers.Listings.Price'
+    ],
     PartnerTag: tag,
     PartnerType: 'Associates',
     SearchIndex: 'All',
-    ItemCount: 1
+    ItemCount: 5 // 🔥 FIX: get more results
   });
 
   const now = new Date();
@@ -84,27 +66,28 @@ async function amazonSearch({ query, tag, market }) {
   console.log('PA API status:', apiRes.status, rawText.slice(0, 400));
 
   const data = JSON.parse(rawText);
-  if (data.Errors && data.Errors.length) throw new Error(data.Errors[0].Message + ' (' + data.Errors[0].Code + ')');
-  if (!data.SearchResult?.Items?.length) return null;
 
-  const item = data.SearchResult.Items[0];
-  return {
-    imgUrl: item.Images?.Primary?.Large?.URL || item.Images?.Primary?.Medium?.URL || '',
-    productUrl: item.DetailPageURL || ('https://' + resolvedMarket + '/dp/' + item.ASIN + '?tag=' + tag),
-    price: item.Offers?.Listings?.[0]?.Price?.DisplayAmount || '',
-    title: item.ItemInfo?.Title?.DisplayValue || '',
-    asin: item.ASIN || ''
-  };
-}
+  if (data.Errors && data.Errors.length) {
+    throw new Error(data.Errors[0].Message + ' (' + data.Errors[0].Code + ')');
+  }
 
-function getRegion(market) {
-  const m = { 'www.amazon.co.uk':'eu-west-1','www.amazon.de':'eu-west-1','www.amazon.fr':'eu-west-1','www.amazon.it':'eu-west-1','www.amazon.es':'eu-west-1','www.amazon.co.jp':'us-west-2','www.amazon.ca':'us-east-1' };
-  return m[market] || 'us-east-1';
-}
+  const items = data?.SearchResult?.Items || [];
+  if (!items.length) return null;
 
-function getSigningKey(secret, dateStamp, region) {
-  const kDate    = crypto.createHmac('sha256', 'AWS4' + secret).update(dateStamp).digest();
-  const kRegion  = crypto.createHmac('sha256', kDate).update(region).digest();
-  const kService = crypto.createHmac('sha256', kRegion).update('ProductAdvertisingAPI').digest();
-  return           crypto.createHmac('sha256', kService).update('aws4_request').digest();
+  // ✅ FIX: map ALL items + filter
+  const products = items
+    .map(item => ({
+      imgUrl: item.Images?.Primary?.Large?.URL ||
+              item.Images?.Primary?.Medium?.URL || '',
+      productUrl: item.DetailPageURL ||
+        ('https://' + resolvedMarket + '/dp/' + item.ASIN + '?tag=' + tag),
+      price: item.Offers?.Listings?.[0]?.Price?.DisplayAmount || '',
+      title: item.ItemInfo?.Title?.DisplayValue || '',
+      asin: item.ASIN || ''
+    }))
+    .filter(p => p.imgUrl && p.title); // 🔥 remove junk
+
+  if (!products.length) return null;
+
+  return products; // 🔥 RETURN ARRAY (not single item)
 }
