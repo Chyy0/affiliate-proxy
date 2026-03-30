@@ -1,0 +1,6 @@
+{
+  "name": "affiliate-proxy",
+  "version": "1.0.0",
+  "description": "Amazon PA API proxy for Affiliate Image Finder extension",
+  "engines": { "node": "20.x" }
+}
